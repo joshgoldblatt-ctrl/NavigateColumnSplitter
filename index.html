@@ -1,12 +1,23 @@
 <!--
 ================================================================================
   App:          LaGuardia Navigate File Generator for CUNY
-  Version:      1.0
-  Released:     October 2, 2026
+  Version:      1.1
+  Released:     October 5, 2026
   Developed by: Josh Goldblatt using Claude
 ================================================================================
   CHANGELOG (most recent first)
 --------------------------------------------------------------------------------
+  v1.1  2026-10-05
+    - Required-column matching now accepts alternate spellings, case-insensitive:
+      Student ID (also Student_ID, StudentID, EMPLID), Assigned Staff (also
+      Assigned_Staff), Category (also Categories - the spelling Navigate uses in
+      appointment reports). Matched columns are renamed to the standard name
+      internally, so the rest of the app and the export are unchanged.
+    - The "Missing required column(s)" error now lists the headers it found, so
+      a colleague at another campus can see what their export actually calls
+      the column.
+    - Header-row detection is unchanged: the first row containing "Student ID"
+      is the header, whether it is line 1 or follows Navigate's preamble.
   v1.0  2026-10-02
     - Initial release. A campus-agnostic sibling of the LaGuardia Navigate
       Caseload Generator, built fresh on the standard design system for
@@ -51,7 +62,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Navigate File Generator for CUNY v1.0</title>
+<title>Navigate File Generator for CUNY v1.1</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -194,17 +205,21 @@ header{padding:38px 0 0}
   <div class="brand-row">
     <div>
       <h1>Navigate File Generator <span class="accent">for CUNY</span></h1>
-      <p class="subtitle">Turn a Navigate enrollment export into an analysis-ready file: split any Assigned Staff relationship into its own column, flag the categories you care about, and stamp the semester.</p>
+      <p class="subtitle">Turn a Navigate export into an analysis-ready file: split any Assigned Staff relationship into its own column, flag the categories you care about, and stamp the semester.</p>
     </div>
     <div class="meta-box">
-      <b>Version:</b><span>1.0</span>
-      <b>Released:</b><span>October 2, 2026</span>
+      <b>Version:</b><span>1.1</span>
+      <b>Released:</b><span>October 5, 2026</span>
       <b>Developed by:</b><span>Josh Goldblatt using Claude</span>
     </div>
   </div>
   <div class="clog">
     <button class="clog-head" onclick="toggleChangelog()"><span>Version history</span><span id="clogArrow" style="transition:transform .25s">&#9660;</span></button>
     <div class="clog-body" id="clogBody">
+      <div class="v">v1.1 &middot; October 5, 2026</div>
+      <ul>
+        <li><strong>Flexible column names:</strong> accepts Category or Categories, Student ID or EMPLID, and underscore variants, case-insensitive. The missing-column message now lists the headers found in the file.</li>
+      </ul>
       <div class="v">v1.0 &middot; October 2, 2026</div>
       <ul>
         <li><strong>Initial release.</strong> Campus-agnostic version of the LaGuardia Navigate Caseload Generator. Upload a Navigate enrollment export, pick the semester, choose which Assigned Staff relationships to split into columns, choose categories to flag, and export.</li>
@@ -220,7 +235,7 @@ header{padding:38px 0 0}
 <div class="drop" id="dropMain">
   <h3 style="margin-bottom:6px">Navigate enrollment export</h3>
   <div class="help">
-    Must contain <code>Student ID</code>, <code>Assigned Staff</code>, and <code>Category</code>. The report-header lines Navigate puts above the real header are skipped automatically.
+    Must contain <code>Student ID</code>, <code>Assigned Staff</code>, and <code>Category</code> (or <code>Categories</code>); matching is case-insensitive. The report-header lines Navigate puts above the real header are skipped automatically.
   </div>
   <input type="file" id="mainFile" accept=".csv">
   <div class="status" id="mainStatus"></div>
@@ -328,14 +343,18 @@ document.getElementById('mainFile').addEventListener('change', e=>{
   Papa.parse(f,{ skipEmptyLines:false, complete:res=>{
     try{
       const data=res.data;
-      // locate the real header row: first row containing "Student ID"
-      const hi=data.findIndex(r=>r.some(c=>(c||'').toString().trim().toLowerCase()==='student id'));
-      if(hi===-1) throw new Error('No "Student ID" header found.');
+      // v1.1: accepted spellings per required column (case-insensitive). Navigate's
+      // student export says "Category"; its appointment report says "Categories".
+      const ALIASES={ [COL.ID]:['student id','student_id','studentid','emplid'], [COL.STAFF]:['assigned staff','assigned_staff'], [COL.CAT]:['category','categories'] };
+      // locate the real header row: first row containing any accepted Student ID spelling
+      const hi=data.findIndex(r=>r.some(c=>ALIASES[COL.ID].includes((c||'').toString().trim().toLowerCase())));
+      if(hi===-1) throw new Error('No "Student ID" (or EMPLID) header found.');
       const headers=data[hi].map(h=>(h||'').toString().trim());
-      const need=[COL.ID,COL.STAFF,COL.CAT].filter(c=>!headers.map(h=>h.toLowerCase()).includes(c.toLowerCase()));
-      if(need.length) throw new Error('Missing required column(s): '+need.join(', '));
-      // canonicalize header case for the three required columns
-      const canon=headers.map(h=>{ const l=h.toLowerCase(); return l==='student id'?COL.ID:l==='assigned staff'?COL.STAFF:l==='category'?COL.CAT:h; });
+      const lower=headers.map(h=>h.toLowerCase());
+      const need=Object.keys(ALIASES).filter(c=>!ALIASES[c].some(a=>lower.includes(a)));
+      if(need.length) throw new Error('Missing required column(s): '+need.join(', ')+'. Headers found: '+headers.join(', '));
+      // canonicalize the three required columns to their standard names
+      const canon=headers.map(h=>{ const l=h.toLowerCase(); for(const c of Object.keys(ALIASES)) if(ALIASES[c].includes(l)) return c; return h; });
       const rows=[];
       for(let i=hi+1;i<data.length;i++){ const r=data[i]; if(!r||r.every(c=>!(c||'').toString().trim())) continue; const o={}; canon.forEach((h,k)=>o[h]=(r[k]??'').toString()); if(o[COL.ID].trim()) rows.push(o); }
       state.raw=data; state.headers=canon; state.rows=rows; state.processed=null;
