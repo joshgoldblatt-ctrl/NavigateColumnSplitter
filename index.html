@@ -1,12 +1,22 @@
 <!--
 ================================================================================
   App:          LaGuardia Navigate File Generator for CUNY
-  Version:      1.1
-  Released:     October 5, 2026
+  Version:      1.2
+  Released:     October 6, 2026
   Developed by: Josh Goldblatt using Claude
 ================================================================================
   CHANGELOG (most recent first)
 --------------------------------------------------------------------------------
+  v1.2  2026-10-06
+    - Semester picker removed. The flow is now Upload -> Choose relationships
+      & process -> dashboard -> Download CSV. The Process button enables as
+      soon as a file loads.
+    - The export no longer carries a Semester column; derived columns are
+      Academic Standing, Graduation Status, and Major (from Category).
+    - Relationship dialog header now reads "Choose relationships" instead of
+      the semester; the export file name is Navigate_File_<date>.csv.
+    - Removed: selectTerm, getSemester, updateSemBadge, state.semester,
+      COL.SEM / DERIVED.SEM, and the .seg / .sem-badge styles.
   v1.1  2026-10-05
     - Required-column matching now accepts alternate spellings, case-insensitive:
       Student ID (also Student_ID, StudentID, EMPLID), Assigned Staff (also
@@ -35,7 +45,8 @@
       student has more than one for that type. No role names are hard-coded
       anywhere; the list is derived entirely from the uploaded file.
     - Semester picker (Fall/Spring + year 2024-2030, no default, required) stamps
-      a Semester column on every row. No clinical-course logic.
+      a Semester column on every row. No clinical-course logic. (Picker removed
+      in v1.2.)
     - Derived columns, all from Navigate-wide Category prefixes: Academic Standing
       ("Academic Standing:"), Graduation Status ("Graduation Status:", all values
       "; "-joined), Major ("Major:"). All prefix-based, so new values appear
@@ -62,7 +73,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Navigate File Generator for CUNY v1.1</title>
+<title>Navigate File Generator for CUNY v1.2</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -164,13 +175,6 @@ header{padding:38px 0 0}
 .help{font-size:13px;color:var(--ink-soft);line-height:1.6}
 .help code{background:var(--paper);border:1px solid var(--line);padding:1px 6px;border-radius:5px;font-size:12px;color:var(--ink)}
 .status{margin-top:12px;font-size:14px;min-height:22px}
-/* semester */
-.seg{display:inline-flex;border:1.5px solid var(--line);border-radius:999px;overflow:hidden;background:#fff}
-.seg button{font-family:var(--font-body);font-weight:600;font-size:14px;padding:8px 20px;border:none;background:none;color:var(--ink-soft);cursor:pointer}
-.seg button.on{background:var(--ink);color:#fff}
-.sem-badge{display:inline-flex;align-items:center;padding:8px 16px;border-radius:999px;background:var(--ink-faint);color:#fff;font-weight:700;font-size:15px;letter-spacing:.2px}
-.sem-badge.set{background:var(--ink)}
-.sem-badge.err{background:var(--accent)}
 /* modal */
 .overlay{position:fixed;inset:0;background:rgba(34,37,58,.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px}
 .modal{background:var(--card);border-radius:var(--radius);max-width:680px;width:100%;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 18px 50px rgba(0,0,0,.35);overflow:hidden}
@@ -205,17 +209,21 @@ header{padding:38px 0 0}
   <div class="brand-row">
     <div>
       <h1>Navigate File Generator <span class="accent">for CUNY</span></h1>
-      <p class="subtitle">Turn a Navigate export into an analysis-ready file: split any Assigned Staff relationship into its own column, flag the categories you care about, and stamp the semester.</p>
+      <p class="subtitle">Turn a Navigate enrollment export into an analysis-ready file: split any Assigned Staff relationship into its own column, and flag the categories you care about.</p>
     </div>
     <div class="meta-box">
-      <b>Version:</b><span>1.1</span>
-      <b>Released:</b><span>October 5, 2026</span>
+      <b>Version:</b><span>1.2</span>
+      <b>Released:</b><span>October 6, 2026</span>
       <b>Developed by:</b><span>Josh Goldblatt using Claude</span>
     </div>
   </div>
   <div class="clog">
     <button class="clog-head" onclick="toggleChangelog()"><span>Version history</span><span id="clogArrow" style="transition:transform .25s">&#9660;</span></button>
     <div class="clog-body" id="clogBody">
+      <div class="v">v1.2 &middot; October 6, 2026</div>
+      <ul>
+        <li><strong>Semester picker removed:</strong> upload, choose relationships, download. No Semester column in the export; file name is Navigate_File_&lt;date&gt;.csv.</li>
+      </ul>
       <div class="v">v1.1 &middot; October 5, 2026</div>
       <ul>
         <li><strong>Flexible column names:</strong> accepts Category or Categories, Student ID or EMPLID, and underscore variants, case-insensitive. The missing-column message now lists the headers found in the file.</li>
@@ -241,29 +249,11 @@ header{padding:38px 0 0}
   <div class="status" id="mainStatus"></div>
 </div>
 
-<!-- ============ STEP 2: SEMESTER ============ -->
-<div class="sec-label">2 &middot; Semester <span class="muted" style="letter-spacing:0;text-transform:none;font-family:var(--font-body);font-size:13px">(required &mdash; stamped on every row)</span></div>
-<div class="panel" style="padding:18px 22px">
-  <div class="row" style="gap:18px">
-    <div class="seg">
-      <button id="termFall" onclick="selectTerm('Fall')">Fall</button>
-      <button id="termSpring" onclick="selectTerm('Spring')">Spring</button>
-    </div>
-    <div class="field" style="margin:0;min-width:140px">
-      <select id="semYear" onchange="updateSemBadge()">
-        <option value="" selected>&mdash; year &mdash;</option>
-        <option>2024</option><option>2025</option><option>2026</option><option>2027</option><option>2028</option><option>2029</option><option>2030</option>
-      </select>
-    </div>
-    <span class="sem-badge" id="semBadge">Not selected</span>
-  </div>
-</div>
-
 <!-- ============ STEP 3: PROCESS ============ -->
-<div class="sec-label">3 &middot; Process</div>
+<div class="sec-label">2 &middot; Process</div>
 <div class="row" style="margin-bottom:10px">
   <button class="btn btn-primary btn-lg" id="processBtn" onclick="startProcess()" disabled>Choose relationships &amp; process</button>
-  <span class="help" id="processHint">Upload a file and pick a semester first.</span>
+  <span class="help" id="processHint">Upload a file first.</span>
 </div>
 <div class="prog" id="prog"><div class="track"><div class="fill" id="progFill"></div></div><div class="lbl" id="progLbl"></div></div>
 <div class="status" id="globalStatus"></div>
@@ -301,12 +291,10 @@ const state = {
   catStats: {},         // category -> count
   selectedCats: new Set(),
   processed: null,      // array of output objects
-  semester: null,
 };
-let selectedTerm = null;
 
 const COL = { ID:'Student ID', STAFF:'Assigned Staff', CAT:'Category',
-  SEM:'Semester', STANDING:'Academic Standing', GRAD:'Graduation Status', MAJOR:'Major' };
+  STANDING:'Academic Standing', GRAD:'Graduation Status', MAJOR:'Major' };
 // Derived column names are resolved per file: if the export already has a column
 // with the same name (Navigate exports usually include "Major"), the derived
 // column gets a " (from Category)" suffix so nothing is overwritten.
@@ -314,7 +302,7 @@ let DERIVED = {};
 function resolveDerived(){
   const have=new Set(state.headers.map(h=>h.toLowerCase()));
   const pick=n=>have.has(n.toLowerCase())?`${n} (from Category)`:n;
-  DERIVED={ SEM:pick(COL.SEM), STANDING:pick(COL.STANDING), GRAD:pick(COL.GRAD), MAJOR:pick(COL.MAJOR) };
+  DERIVED={ STANDING:pick(COL.STANDING), GRAD:pick(COL.GRAD), MAJOR:pick(COL.MAJOR) };
 }
 
 // =====================================================================
@@ -329,10 +317,7 @@ function showTab(t){ document.querySelectorAll('.tab-btn').forEach(b=>b.classLis
 // =====================================================================
 // SEMESTER
 // =====================================================================
-function selectTerm(t){ selectedTerm=t; document.getElementById('termFall').classList.toggle('on',t==='Fall'); document.getElementById('termSpring').classList.toggle('on',t==='Spring'); updateSemBadge(); }
-function getSemester(){ const y=document.getElementById('semYear').value; return (selectedTerm&&y)?`${selectedTerm} ${y}`:null; }
-function updateSemBadge(){ const s=getSemester(), b=document.getElementById('semBadge'); b.textContent=s||'Not selected'; b.className='sem-badge'+(s?' set':''); refreshProcessBtn(); }
-function refreshProcessBtn(){ const ok=!!state.raw&&!!getSemester(); document.getElementById('processBtn').disabled=!ok; document.getElementById('processHint').textContent=ok?'':(state.raw?'Pick a term and year.':'Upload a file and pick a semester first.'); }
+function refreshProcessBtn(){ const ok=!!state.raw; document.getElementById('processBtn').disabled=!ok; document.getElementById('processHint').textContent=ok?'':'Upload a file first.'; }
 
 // =====================================================================
 // FILE LOAD
@@ -391,8 +376,6 @@ function scanRelationships(){
   state.relTypes=rt;
 }
 function startProcess(){
-  state.semester=getSemester();
-  if(!state.semester){ setStatus('globalStatus','Pick a term and year first.','err'); document.getElementById('semBadge').className='sem-badge err'; return; }
   scanRelationships();
   openRelPicker();
 }
@@ -400,7 +383,7 @@ function openRelPicker(){
   const rels=Object.entries(state.relTypes).sort((a,b)=>b[1].students.size-a[1].students.size);
   const ov=document.createElement('div'); ov.className='overlay'; ov.id='relOverlay';
   ov.innerHTML=`<div class="modal">
-    <div class="modal-head"><div class="eyebrow">Processing for</div><h2>${esc(state.semester)}</h2></div>
+    <div class="modal-head"><div class="eyebrow">Step 2 of 2</div><h2>Choose relationships</h2></div>
     <div class="modal-body">
       <p style="font-size:14px;color:var(--ink-soft);margin-bottom:12px">Tick each <strong>Assigned Staff relationship</strong> to split into its own column. The column will carry the staff member's name; students with two staff in the same relationship get both, separated by "; ". ${rels.length} relationship type${rels.length===1?'':'s'} found in this file.</p>
       <div class="row" style="margin-bottom:10px"><input type="text" id="relSearch" placeholder="Filter relationships…" oninput="filterRelRows(this.value)" style="flex:1;min-width:200px;font-family:var(--font-body);font-size:14px;padding:8px 11px;border:1.5px solid var(--line);border-radius:8px"><button class="btn btn-neutral" onclick="setAllRels(true)">Select all</button><button class="btn btn-neutral" onclick="setAllRels(false)">Clear all</button></div>
@@ -434,7 +417,6 @@ function runProcessing(){
     resolveDerived();
     const out=state.rows.map(r=>{
       const o={}; state.headers.forEach(h=>o[h]=r[h]);
-      o[DERIVED.SEM]=state.semester;
       const cat=r[COL.CAT]||'';
       o[DERIVED.STANDING]=extractByPrefix(cat,'Academic Standing',false);
       o[DERIVED.GRAD]=extractByPrefix(cat,'Graduation Status',true);
@@ -455,7 +437,7 @@ function runProcessing(){
     document.getElementById('results').style.display='';
     showTab('staff');
     progress(100,'Done');
-    setStatus('globalStatus',`Processed ${out.length.toLocaleString()} students for ${state.semester} — ${rels.length} relationship column${rels.length===1?'':'s'}`,'ok');
+    setStatus('globalStatus',`Processed ${out.length.toLocaleString()} students — ${rels.length} relationship column${rels.length===1?'':'s'}`,'ok');
     document.getElementById('results').scrollIntoView({behavior:'smooth',block:'start'});
   },60);
 }
@@ -519,11 +501,11 @@ function setAllCats(on){ document.querySelectorAll('tr[data-cat] input').forEach
 // =====================================================================
 // EXPORT
 // =====================================================================
-function updateExportSummary(){ const el=document.getElementById('exportSummary'); if(!el||!state.processed) return; el.textContent=`${state.processed.length.toLocaleString()} rows · ${state.headers.length} original + 4 derived + ${state.selectedRels.size} relationship + ${state.selectedCats.size} category columns`; }
+function updateExportSummary(){ const el=document.getElementById('exportSummary'); if(!el||!state.processed) return; el.textContent=`${state.processed.length.toLocaleString()} rows · ${state.headers.length} original + 3 derived + ${state.selectedRels.size} relationship + ${state.selectedCats.size} category columns`; }
 function exportCSV(){
   if(!state.processed){ setStatus('globalStatus','Process a file first.','err'); return; }
   const rels=[...state.selectedRels]; const cats=[...state.selectedCats].sort((a,b)=>a.localeCompare(b,undefined,{sensitivity:'base'}));
-  const fields=[...state.headers, DERIVED.SEM, DERIVED.STANDING, DERIVED.GRAD, DERIVED.MAJOR, ...rels, ...cats];
+  const fields=[...state.headers, DERIVED.STANDING, DERIVED.GRAD, DERIVED.MAJOR, ...rels, ...cats];
   const data=state.processed.map(o=>{
     const row={...o};
     if(cats.length){ const set=new Set((o[COL.CAT]||'').split(',').map(c=>c.trim())); cats.forEach(c=>row[c]=set.has(c)?'Yes':'No'); }
@@ -532,8 +514,8 @@ function exportCSV(){
   const csv=Papa.unparse({fields,data},{quotes:true});
   const blob=new Blob(['﻿'+csv],{type:'text/csv;charset=utf-8;'});
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
-  const semTag=(state.semester||'').replace(/\s+/g,'_'); const d=new Date(); const stamp=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-  a.download=`Navigate_File_${semTag}_${stamp}.csv`; document.body.appendChild(a); a.click(); a.remove();
+  const d=new Date(); const stamp=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  a.download=`Navigate_File_${stamp}.csv`; document.body.appendChild(a); a.click(); a.remove();
   setStatus('globalStatus',`Exported ${data.length.toLocaleString()} rows × ${fields.length} columns`,'ok');
 }
 </script>
