@@ -1,12 +1,30 @@
 <!--
 ================================================================================
   App:          LaGuardia Navigate File Generator for CUNY
-  Version:      1.2
-  Released:     October 6, 2026
+  Version:      1.5
+  Released:     October 16, 2026
   Developed by: Josh Goldblatt using Claude
 ================================================================================
   CHANGELOG (most recent first)
 --------------------------------------------------------------------------------
+  v1.5  2026-10-16
+    - Process is now a guided four-step dialog, carried over from the Navigate
+      Enrollment Roll-Up app. Step 1 asks whether to split any Assigned Staff
+      relationship into its own column (Yes, choose relationships / No, skip);
+      Step 2 is the relationship checklist; Step 3 asks whether to add any
+      category as a Yes/No column; Step 4 is a category checklist with counts, a
+      search box and Select/Clear matching and Select/Clear all. Skipping a
+      question jumps past its list, Back returns to the previous step, and the
+      header counts only the steps that apply. Users had been unsure what leaving
+      the relationship list unticked would do; the explicit question makes "none"
+      a deliberate choice, and categories can now be chosen before processing
+      instead of only afterwards on the Category Manager tab.
+    - Category counts are now computed when the file loads rather than during
+      processing, so the Step 4 list exists before Process runs. Selections made
+      in Step 4 appear pre-ticked in the Category Manager tab and vice versa when
+      Process is rerun; relationship and category selections that do not exist in
+      a newly loaded file are discarded.
+    - The Process button is now labelled "Process file". Export layout unchanged.
   v1.2  2026-10-06
     - Semester picker removed. The flow is now Upload -> Choose relationships
       & process -> dashboard -> Download CSV. The Process button enables as
@@ -73,7 +91,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Navigate File Generator for CUNY v1.2</title>
+<title>Navigate File Generator for CUNY v1.5</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -212,14 +230,18 @@ header{padding:38px 0 0}
       <p class="subtitle">Turn a Navigate enrollment export into an analysis-ready file: split any Assigned Staff relationship into its own column, and flag the categories you care about.</p>
     </div>
     <div class="meta-box">
-      <b>Version:</b><span>1.2</span>
-      <b>Released:</b><span>October 6, 2026</span>
+      <b>Version:</b><span>1.5</span>
+      <b>Released:</b><span>October 16, 2026</span>
       <b>Developed by:</b><span>Josh Goldblatt using Claude</span>
     </div>
   </div>
   <div class="clog">
     <button class="clog-head" onclick="toggleChangelog()"><span>Version history</span><span id="clogArrow" style="transition:transform .25s">&#9660;</span></button>
     <div class="clog-body" id="clogBody">
+      <div class="v">v1.5 &middot; October 16, 2026</div>
+      <ul>
+        <li><strong>Guided Process dialog:</strong> Process now asks whether you want relationship columns before showing the relationship list, then whether you want category columns before showing the category list. Answer No to skip a list; Back returns to the previous step. Categories chosen here are pre-ticked on the Category Manager tab.</li>
+      </ul>
       <div class="v">v1.2 &middot; October 6, 2026</div>
       <ul>
         <li><strong>Semester picker removed:</strong> upload, choose relationships, download. No Semester column in the export; file name is Navigate_File_&lt;date&gt;.csv.</li>
@@ -252,7 +274,7 @@ header{padding:38px 0 0}
 <!-- ============ STEP 3: PROCESS ============ -->
 <div class="sec-label">2 &middot; Process</div>
 <div class="row" style="margin-bottom:10px">
-  <button class="btn btn-primary btn-lg" id="processBtn" onclick="startProcess()" disabled>Choose relationships &amp; process</button>
+  <button class="btn btn-primary btn-lg" id="processBtn" onclick="startProcess()" disabled>Process file</button>
   <span class="help" id="processHint">Upload a file first.</span>
 </div>
 <div class="prog" id="prog"><div class="track"><div class="fill" id="progFill"></div></div><div class="lbl" id="progLbl"></div></div>
@@ -343,6 +365,11 @@ document.getElementById('mainFile').addEventListener('change', e=>{
       const rows=[];
       for(let i=hi+1;i<data.length;i++){ const r=data[i]; if(!r||r.every(c=>!(c||'').toString().trim())) continue; const o={}; canon.forEach((h,k)=>o[h]=(r[k]??'').toString()); if(o[COL.ID].trim()) rows.push(o); }
       state.raw=data; state.headers=canon; state.rows=rows; state.processed=null;
+      // category counts (skip "Major:" entries, captured in the derived Major column)
+      const catStats={};
+      rows.forEach(r=>(r[COL.CAT]||'').split(',').map(c=>c.trim()).filter(c=>c&&!c.toLowerCase().startsWith('major:')).forEach(c=>catStats[c]=(catStats[c]||0)+1));
+      state.catStats=catStats;
+      [...state.selectedCats].forEach(c=>{ if(!(c in catStats)) state.selectedCats.delete(c); });
       document.getElementById('dropMain').classList.add('loaded');
       setStatus('mainStatus',`${rows.length.toLocaleString()} students loaded`,'ok');
       document.getElementById('results').style.display='none';
@@ -352,7 +379,7 @@ document.getElementById('mainFile').addEventListener('change', e=>{
 });
 
 // =====================================================================
-// RELATIONSHIP SCAN + PICKER
+// RELATIONSHIP SCAN + GUIDED PROCESS DIALOG (ask/pick relationships, ask/pick categories)
 // =====================================================================
 // "Last, First (Relationship Type)" entries separated by ";". The relationship
 // text is everything after the FIRST "(" with one trailing ")" removed, so a
@@ -374,31 +401,72 @@ function scanRelationships(){
     });
   });
   state.relTypes=rt;
+  [...state.selectedRels].forEach(r=>{ if(!(r in rt)) state.selectedRels.delete(r); });
 }
-function startProcess(){
-  scanRelationships();
-  openRelPicker();
-}
-function openRelPicker(){
-  const rels=Object.entries(state.relTypes).sort((a,b)=>b[1].students.size-a[1].students.size);
-  const ov=document.createElement('div'); ov.className='overlay'; ov.id='relOverlay';
-  ov.innerHTML=`<div class="modal">
-    <div class="modal-head"><div class="eyebrow">Step 2 of 2</div><h2>Choose relationships</h2></div>
-    <div class="modal-body">
-      <p style="font-size:14px;color:var(--ink-soft);margin-bottom:12px">Tick each <strong>Assigned Staff relationship</strong> to split into its own column. The column will carry the staff member's name; students with two staff in the same relationship get both, separated by "; ". ${rels.length} relationship type${rels.length===1?'':'s'} found in this file.</p>
-      <div class="row" style="margin-bottom:10px"><input type="text" id="relSearch" placeholder="Filter relationships…" oninput="filterRelRows(this.value)" style="flex:1;min-width:200px;font-family:var(--font-body);font-size:14px;padding:8px 11px;border:1.5px solid var(--line);border-radius:8px"><button class="btn btn-neutral" onclick="setAllRels(true)">Select all</button><button class="btn btn-neutral" onclick="setAllRels(false)">Clear all</button></div>
-      <div id="relList">${rels.length?rels.map(([rel,v])=>`<label class="rel-row" data-rel="${esc(rel.toLowerCase())}"><input type="checkbox" value="${esc(rel)}" ${state.selectedRels.has(rel)?'checked':''} onchange="onRelTick(this)"><span class="nm">${esc(rel)}</span><span class="ct">${v.students.size.toLocaleString()} students &middot; ${Object.keys(v.staff).length} staff</span></label>`).join(''):'<div class="empty-state">No "(Relationship)" tags found in Assigned Staff.</div>'}</div>
-    </div>
-    <div class="modal-foot"><span class="result-count"><b id="relCount">${state.selectedRels.size}</b> selected</span><div class="row"><button class="btn btn-neutral" onclick="closeRelPicker()">Cancel</button><button class="btn btn-primary" onclick="confirmRelPicker()">Process</button></div></div>
+const fmt = n => Number(n).toLocaleString();
+// Guided dialog: ask -> pick for relationships, then ask -> pick for categories.
+// Only the steps that apply to the loaded file are shown and counted.
+const wiz={step:null};
+function wizSteps(){ const st=[]; if(Object.keys(state.relTypes).length) st.push('askRel','pickRel'); if(Object.keys(state.catStats).length) st.push('askCat','pickCat'); return st; }
+function startProcess(){ scanRelationships(); const st=wizSteps(); if(!st.length){ runProcessing(); return; } wizGo(st[0]); }
+const INPUT_STYLE='flex:1;min-width:200px;font-family:var(--font-body);font-size:14px;padding:8px 11px;border:1.5px solid var(--line);border-radius:8px';
+function wizGo(step){
+  wiz.step=step; const steps=wizSteps(); const i=steps.indexOf(step), total=steps.length; const prev=steps[i-1];
+  const hasCatSteps=steps.includes('askCat');
+  let ov=document.getElementById('relOverlay');
+  if(!ov){ ov=document.createElement('div'); ov.className='overlay'; ov.id='relOverlay'; document.body.appendChild(ov); ov.addEventListener('click',e=>{ if(e.target===ov) wizClose(); }); }
+  const back=prev?`<button class="btn btn-neutral" onclick="wizGo('${prev}')">&larr; Back</button>`:`<button class="btn btn-neutral" onclick="wizClose()">Cancel</button>`;
+  let title='',body='',right='';
+  if(step==='askRel'){
+    const rels=Object.entries(state.relTypes).sort((a,b)=>b[1].students.size-a[1].students.size);
+    title='Assigned Staff relationships';
+    body=`<p style="font-size:15px;margin-bottom:12px">This file has <strong>${rels.length} relationship type${rels.length===1?'':'s'}</strong> in Assigned Staff, such as ${rels.slice(0,3).map(([r])=>`<em>${esc(r)}</em>`).join(', ')}.</p>
+      <p style="font-size:15px;margin-bottom:12px">Do you want to split any of them into their own columns? Each chosen relationship becomes a column holding the assigned staff member's name.</p>
+      <p class="help">Either way, the original Assigned Staff column stays in the export.</p>`;
+    right=`<button class="btn btn-secondary" onclick="wizSkipRel()">No, skip</button><button class="btn btn-primary" onclick="wizGo('pickRel')">Yes, choose relationships</button>`;
+  } else if(step==='pickRel'){
+    const rels=Object.entries(state.relTypes).sort((a,b)=>b[1].students.size-a[1].students.size);
+    title='Choose relationships';
+    body=`<p style="font-size:14px;color:var(--ink-soft);margin-bottom:12px">Tick each <strong>Assigned Staff relationship</strong> to split into its own column. Students with two staff in the same relationship get both names, separated by "; ".</p>
+      <div class="row" style="margin-bottom:10px"><input type="text" id="relSearch" placeholder="Filter relationships…" oninput="filterRelRows(this.value)" style="${INPUT_STYLE}"><button class="btn btn-neutral" onclick="setAllRels(true)">Select all</button><button class="btn btn-neutral" onclick="setAllRels(false)">Clear all</button></div>
+      <div id="relList">${rels.map(([rel,v])=>`<label class="rel-row" data-rel="${esc(rel.toLowerCase())}"><input type="checkbox" value="${esc(rel)}" ${state.selectedRels.has(rel)?'checked':''} onchange="onRelTick(this)"><span class="nm">${esc(rel)}</span><span class="ct">${fmt(v.students.size)} students &middot; ${Object.keys(v.staff).length} staff</span></label>`).join('')}</div>`;
+    right=`<span class="result-count"><b id="relCount">${state.selectedRels.size}</b> selected</span><button class="btn btn-primary" onclick="wizNext()">${hasCatSteps?'Next: categories &rarr;':'Process'}</button>`;
+  } else if(step==='askCat'){
+    const n=Object.keys(state.catStats).length;
+    const top=Object.entries(state.catStats).sort((a,b)=>b[1]-a[1])[0][0];
+    title='Category columns';
+    body=`<p style="font-size:15px;margin-bottom:12px">This file has <strong>${fmt(n)} distinct categories</strong> (for example <em>${esc(top)}</em>).</p>
+      <p style="font-size:15px;margin-bottom:12px">Do you want to add any of them to the export as a <strong>Yes/No column</strong>?</p>
+      <p class="help">Academic Standing, Graduation Status and Major are always derived from Category and exported as their own columns; the original Category column is kept too.</p>`;
+    right=`<button class="btn btn-secondary" onclick="wizSkipCat()">No, skip</button><button class="btn btn-primary" onclick="wizGo('pickCat')">Yes, choose categories</button>`;
+  } else if(step==='pickCat'){
+    const total=state.rows.length;
+    const cats=Object.entries(state.catStats).sort((a,b)=>a[0].localeCompare(b[0],undefined,{sensitivity:'base'}));
+    title='Choose categories';
+    body=`<p style="font-size:14px;color:var(--ink-soft);margin-bottom:12px">Tick each category to add as a <strong>Yes/No column</strong>. "Major:" entries are not listed because the Major column already carries them. You can adjust this list later on the Category Manager tab.</p>
+      <div class="row" style="margin-bottom:10px"><input type="text" id="wizCatSearch" placeholder="Search categories…" oninput="wizFilterCats(this.value)" style="${INPUT_STYLE}"><button class="btn btn-secondary" onclick="wizSetMatching(true)">Select matching</button><button class="btn btn-neutral" onclick="wizSetMatching(false)">Clear matching</button><button class="btn btn-neutral" onclick="wizSetAll(true)">Select all</button><button class="btn btn-neutral" onclick="wizSetAll(false)">Clear all</button></div>
+      <div id="wizCatList">${cats.map(([c,n])=>`<label class="rel-row" data-cat="${esc(c.toLowerCase())}"><input type="checkbox" value="${esc(c)}" ${state.selectedCats.has(c)?'checked':''} onchange="wizCatTick(this)"><span class="nm">${esc(c)}</span><span class="ct">${fmt(n)} students &middot; ${(n/total*100).toFixed(1)}%</span></label>`).join('')}</div>`;
+    right=`<span class="result-count"><b id="wizCatSel">${state.selectedCats.size}</b> selected</span><button class="btn btn-primary" onclick="wizFinish()">Process</button>`;
+  }
+  ov.innerHTML=`<div class="modal" style="${step==='pickCat'?'max-width:820px':''}">
+    <div class="modal-head"><div class="eyebrow">Step ${i+1} of ${total}</div><h2>${title}</h2></div>
+    <div class="modal-body">${body}</div>
+    <div class="modal-foot">${back}<div class="row">${right}</div></div>
   </div>`;
-  document.body.appendChild(ov);
-  ov.addEventListener('click',e=>{ if(e.target===ov) closeRelPicker(); });
+  ov.querySelector('.modal-body').scrollTop=0;
 }
-function onRelTick(cb){ cb.checked?state.selectedRels.add(cb.value):state.selectedRels.delete(cb.value); document.getElementById('relCount').textContent=state.selectedRels.size; }
-function setAllRels(on){ document.querySelectorAll('#relList input[type=checkbox]').forEach(cb=>{ if(cb.closest('.rel-row').style.display==='none') return; cb.checked=on; onRelTick(cb); }); }
+function wizNext(){ const steps=wizSteps(); const after=steps.slice(steps.indexOf(wiz.step)+1); const nxt=after.find(x=>x==='askCat'); nxt?wizGo(nxt):wizFinish(); }
+function wizSkipRel(){ state.selectedRels.clear(); wizNext(); }
+function wizSkipCat(){ state.selectedCats.clear(); wizFinish(); }
+function wizFinish(){ wizClose(); runProcessing(); }
+function wizClose(){ document.getElementById('relOverlay')?.remove(); wiz.step=null; }
+function onRelTick(cb){ cb.checked?state.selectedRels.add(cb.value):state.selectedRels.delete(cb.value); const el=document.getElementById('relCount'); if(el) el.textContent=state.selectedRels.size; }
+function setAllRels(on){ document.querySelectorAll('#relList input[type=checkbox]').forEach(cb=>{ if(cb.closest('.rel-row').style.display==='none') return; if(cb.checked!==on){ cb.checked=on; onRelTick(cb); } }); }
 function filterRelRows(q){ q=(q||'').trim().toLowerCase(); document.querySelectorAll('#relList .rel-row').forEach(r=>r.style.display=(!q||r.dataset.rel.includes(q))?'':'none'); }
-function closeRelPicker(){ document.getElementById('relOverlay')?.remove(); }
-function confirmRelPicker(){ closeRelPicker(); runProcessing(); }
+function wizCatTick(cb){ cb.checked?state.selectedCats.add(cb.value):state.selectedCats.delete(cb.value); const el=document.getElementById('wizCatSel'); if(el) el.textContent=state.selectedCats.size; }
+function wizFilterCats(q){ q=(q||'').trim().toLowerCase(); document.querySelectorAll('#wizCatList .rel-row').forEach(r=>r.style.display=(!q||r.dataset.cat.includes(q))?'':'none'); }
+function wizSetMatching(on){ document.querySelectorAll('#wizCatList .rel-row').forEach(r=>{ if(r.style.display==='none') return; const cb=r.querySelector('input'); if(cb.checked!==on){ cb.checked=on; wizCatTick(cb); } }); }
+function wizSetAll(on){ document.querySelectorAll('#wizCatList input').forEach(cb=>{ if(cb.checked!==on){ cb.checked=on; wizCatTick(cb); } }); }
 
 // =====================================================================
 // PROCESSING
@@ -413,7 +481,6 @@ function runProcessing(){
   progress(10,'Building rows…');
   setTimeout(()=>{
     const rels=[...state.selectedRels];
-    const catStats={};
     resolveDerived();
     const out=state.rows.map(r=>{
       const o={}; state.headers.forEach(h=>o[h]=r[h]);
@@ -425,13 +492,9 @@ function runProcessing(){
       const byRel={};
       (r[COL.STAFF]||'').split(';').forEach(ent=>{ const p=parseStaffEntry(ent); if(!p||!state.selectedRels.has(p.rel)) return; (byRel[p.rel]=byRel[p.rel]||[]).push(p.name); });
       rels.forEach(rel=>o[rel]=byRel[rel]?[...new Set(byRel[rel])].join('; '):'');
-      // category stats (skip Major: entries — captured in the Major column)
-      cat.split(',').map(c=>c.trim()).filter(c=>c&&!c.toLowerCase().startsWith('major:')).forEach(c=>catStats[c]=(catStats[c]||0)+1);
       return o;
     });
-    state.processed=out; state.catStats=catStats;
-    // drop any previously selected category that no longer exists
-    [...state.selectedCats].forEach(c=>{ if(!(c in catStats)) state.selectedCats.delete(c); });
+    state.processed=out;
     progress(70,'Rendering dashboard…');
     renderStaffTab(); renderCatsTab(); updateExportSummary();
     document.getElementById('results').style.display='';
